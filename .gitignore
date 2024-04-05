@@ -1,0 +1,8 @@
+COCOFiles/
+data/
+frames/
+framesExtracted/
+JSON2YOLO/
+TrainginData*
+transdecbuoy/
+videos/

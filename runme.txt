@@ -1,0 +1,1 @@
+yolo task=segment mode=train model=yolov8n-seg.pt imgsz=640 data="C:\Users\Chef\Desktop\HACKERMAN\Programming\Python Projects\yoloTrainer\TrainingData\trainMe.yaml" epochs=300 batch=-1 name=Buoy_Gate_Torpedo_Bin_300_Rotation360_2575_Mirror_Zoom_Crop_Nano exist_ok=False amp=False
