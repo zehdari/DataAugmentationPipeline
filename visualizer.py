@@ -232,7 +232,7 @@ class PolygonVisualizerApp:
         self.root.mainloop()
 
 # Usage example
-base_dir = "C:\\Users\\Chef\\Desktop\\HACKERMAN\\Programming\\Python Projects\\yoloTrainer\\TrainingData"
+base_dir = "/media/ubuntu/USB DISK/TrainingData"
 app = PolygonVisualizerApp(base_dir)
 app.run()
 

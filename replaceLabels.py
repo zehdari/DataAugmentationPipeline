@@ -1,7 +1,7 @@
 import os
 
 # Define the root directory containing your label folders
-root_dir = r'C:\Users\Chef\Desktop\HACKERMAN\Programming\Python Projects\yoloTrainer\TrainingData\labels\train\rpactorpedo'
+root_dir = r'/media/ubuntu/USB DISK/TrainingData copy 9/labels/val/rpactorpedo'
 
 # Mapping of text labels to numeric labels
 label_mapping = {
