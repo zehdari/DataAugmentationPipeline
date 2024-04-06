@@ -201,6 +201,16 @@ class PolygonVisualizerApp:
             # Draw the polygon with a thicker line and semi-transparent fill on the temporary image
             temp_draw.polygon(polygon, outline=color, fill=fill_color, width=3)
 
+             # Calculate the bounding box from polygon points
+            xs = [p[0] for p in polygon]
+            ys = [p[1] for p in polygon]
+            xmin, xmax = min(xs), max(xs)
+            ymin, ymax = min(ys), max(ys)
+
+            # Draw the bounding box on the final image
+            temp_draw.rectangle([(xmin, ymin), (xmax, ymax)], outline=color, width=2)
+
+
         # Composite the temporary image with the main image
         resized_image.alpha_composite(temp_image)
 
@@ -232,7 +242,7 @@ class PolygonVisualizerApp:
         self.root.mainloop()
 
 # Usage example
-base_dir = "/media/ubuntu/USB DISK/TrainingData"
+base_dir = "/Volumes/USB DISK/TrainingData"
 app = PolygonVisualizerApp(base_dir)
 app.run()
 
