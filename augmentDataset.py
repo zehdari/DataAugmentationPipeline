@@ -3,6 +3,7 @@ import cv2
 import random
 import numpy as np
 import math
+import shutil
 from shapely.geometry import Polygon, box, MultiPolygon
 from shapely.ops import unary_union
 
@@ -318,24 +319,119 @@ def pad_image_and_adjust_polygons(cropped_image, adjusted_polygons, original_dim
 
     return padded_image, shifted_polygons
 
-def overlay_cropped_detections_on_coco(coco_image, detections, detection_polygons):
-    for detection, polygon in zip(detections, detection_polygons):
-        x_min, y_min, x_max, y_max = calculate_overall_bounding_box([polygon])
-        x_min, y_min = int(x_min * detection.shape[1]), int(y_min * detection.shape[0])
-        x_max, y_max = int(x_max * detection.shape[1]), int(y_max * detection.shape[0])
-        cropped_detection = detection[y_min:y_max, x_min:x_max]
-        x_offset = random.randint(0, coco_image.shape[1] - cropped_detection.shape[1])
-        y_offset = random.randint(0, coco_image.shape[0] - cropped_detection.shape[0])
-        coco_image[y_offset:y_offset + cropped_detection.shape[0], x_offset:x_offset + cropped_detection.shape[1]] = cropped_detection
-    return coco_image
+def overlay_detections_on_coco(coco_image, image, detection_polygons, min_scale=0.1, max_scale=1.0):
+    adjusted_polygons = []
+    
+    # Initialize an empty mask for all detections
+    combined_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+    
+    for idx, polygon in enumerate(detection_polygons):
+        
+        # Convert polygon points to integer coordinates
+        polygon_points = np.array([(int(x * image.shape[1]), int(y * image.shape[0])) for x, y in polygon], dtype=np.int32)
+        
+        # Fill the polygon in the combined mask
+        cv2.fillPoly(combined_mask, [polygon_points], 255)
 
-def process_images_and_labels(image_dir, label_dir, mirror_weights, crop_weights, maintain_aspect_ratio_weights, zoom_weights, zoom_padding):
+    # Create an RGBA image with transparency for all detections
+    b, g, r = cv2.split(image)
+    alpha_channel = np.zeros_like(b)
+    alpha_channel[combined_mask > 0] = 255
+    rgba_detection = cv2.merge((b, g, r, alpha_channel))
+
+    # Find the bounding box of the combined mask
+    x, y, w, h = cv2.boundingRect(combined_mask)
+    cropped_detection = rgba_detection[y:y+h, x:x+w]
+
+    # Scale down if the cropped detection is larger than the COCO image
+    scale_factor = min(coco_image.shape[0] / cropped_detection.shape[0], coco_image.shape[1] / cropped_detection.shape[1])
+
+    if scale_factor < 1.0:
+        cropped_detection = cv2.resize(cropped_detection, (int(cropped_detection.shape[1] * scale_factor), int(cropped_detection.shape[0] * scale_factor)))
+
+    # Apply a random scale factor between min_scale and max_scale
+    random_scale_factor = random.uniform(min_scale, max_scale)
+    new_width = int(cropped_detection.shape[1] * random_scale_factor)
+    new_height = int(cropped_detection.shape[0] * random_scale_factor)
+    cropped_detection = cv2.resize(cropped_detection, (new_width, new_height))
+
+    # Create an overlay with transparency
+    overlay = np.zeros((coco_image.shape[0], coco_image.shape[1], 4), dtype=np.uint8)
+    x_offset = random.randint(0, max(coco_image.shape[1] - cropped_detection.shape[1], 1))
+    y_offset = random.randint(0, max(coco_image.shape[0] - cropped_detection.shape[0], 1))
+
+    overlay[y_offset:y_offset + cropped_detection.shape[0], x_offset:x_offset + cropped_detection.shape[1]] = cropped_detection
+
+    # Combine the overlay with the original image
+    b, g, r, a = cv2.split(overlay)
+    alpha = a / 255.0
+
+    for c in range(3):
+        coco_image[:, :, c] = (1.0 - alpha) * coco_image[:, :, c] + alpha * overlay[:, :, c]
+
+    # Adjust polygon labels for all detections
+    for polygon in detection_polygons:
+        adjusted_polygon = []
+        for x_poly, y_poly in polygon:
+            # Scale to original dimensions
+            x_abs = x_poly * image.shape[1]
+            y_abs = y_poly * image.shape[0]
+
+            # Translate to combined bounding box
+            x_abs -= x
+            y_abs -= y
+
+            # Apply initial scale factor (resizing)
+            if scale_factor < 1.0:
+                x_abs *= scale_factor
+                y_abs *= scale_factor
+
+            # Apply random scale factor
+            x_abs *= random_scale_factor
+            y_abs *= random_scale_factor
+
+            # Translate to new position
+            x_abs += x_offset
+            y_abs += y_offset
+
+            # Normalize back to the new image dimensions
+            x_norm = x_abs / coco_image.shape[1]
+            y_norm = y_abs / coco_image.shape[0]
+
+            adjusted_polygon.append((x_norm, y_norm))
+        adjusted_polygons.append(adjusted_polygon)
+
+    return coco_image, adjusted_polygons
+
+def process_images_and_labels(image_dir, 
+                              label_dir, 
+                              augmented_image_dir,
+                              augmented_label_dir, 
+                              skip_augmentations, 
+                              mirror_weights, 
+                              crop_weights, 
+                              maintain_aspect_ratio_weights, 
+                              zoom_weights, 
+                              zoom_padding):
+    
     for root, dirs, files in os.walk(image_dir):
         print(f"Processing folder: {root}")
+        relative_path = os.path.relpath(root, image_dir)
+        current_subfolder = os.path.basename(relative_path)
+        current_augmented_image_dir = os.path.join(augmented_image_dir, relative_path)
+        current_augmented_label_dir = os.path.join(augmented_label_dir, relative_path)
+
+        os.makedirs(current_augmented_image_dir, exist_ok=True)
+        os.makedirs(current_augmented_label_dir, exist_ok=True)
+
+
         for file in files:
             if file.endswith((".jpg", ".png")):
                 img_path = os.path.join(root, file)
                 lbl_path = img_path.replace(image_dir, label_dir).replace('.jpg', '.txt').replace('.png', '.txt')
+                augmented_img_path = os.path.join(current_augmented_image_dir, file)  # Path for saving augmented images
+                augmented_lbl_path = os.path.join(current_augmented_label_dir, file.replace('.jpg', '.txt').replace('.png', '.txt'))  # Path for saving augmented labels
+
 
                 # Load image
                 image = cv2.imread(img_path)
@@ -359,53 +455,69 @@ def process_images_and_labels(image_dir, label_dir, mirror_weights, crop_weights
                 else:
                     break
 
-                # Decide on mirroring randomly
-                mirror_choice = random.choices([True,False], weights=mirror_weights, k=1)[0]
+                
 
-                # Apply mirroring to the image/labels if chosen
-                if mirror_choice:
-                    image = mirror_image(image)
-                    polygons = [mirror_polygon(polygon) for polygon in polygons]
+                if 'Mirror' not in skip_augmentations or current_subfolder not in skip_augmentations['Mirror']:
+                    # Decide on mirroring randomly
+                    mirror_choice = random.choices([True,False], weights=mirror_weights, k=1)[0]
+                    # Apply mirroring to the image/labels if chosen
+                    if mirror_choice:
+                        image = mirror_image(image)
+                        polygons = [mirror_polygon(polygon) for polygon in polygons]
 
-                # Decide on zooming randomly
-                crop_choice = random.choices([True,False], weights=crop_weights, k=1)[0]
+                if 'Crop' not in skip_augmentations or current_subfolder not in skip_augmentations['Crop']:
+                    # Decide on zooming randomly
+                    crop_choice = random.choices([True,False], weights=crop_weights, k=1)[0]
 
-                # Apply zoom to the image/labels if chosen
-                if crop_choice and polygons: 
-                    image, polygons, class_ids = crop_image_and_polygons(image, polygons, class_ids)
+                    # Apply zoom to the image/labels if chosen
+                    if crop_choice and polygons: 
+                        image, polygons, class_ids = crop_image_and_polygons(image, polygons, class_ids)
 
-                    maintain_aspect_ratio_choice = crop_choice = random.choices([True,False], weights=maintain_aspect_ratio_weights, k=1)[0]
-                    if maintain_aspect_ratio_choice:
-                        image, polygons = pad_image_and_adjust_polygons(image, polygons, (h,w))
+                        maintain_aspect_ratio_choice = crop_choice = random.choices([True,False], weights=maintain_aspect_ratio_weights, k=1)[0]
+                        if maintain_aspect_ratio_choice:
+                            image, polygons = pad_image_and_adjust_polygons(image, polygons, (h,w))
 
-                # Decide on zooming randomly
-                zoom_choice = random.choices([True,False], weights=zoom_weights, k=1)[0]
+                if 'Zoom' not in skip_augmentations or current_subfolder not in skip_augmentations['Zoom']:
+                    # Decide on zooming randomly
+                    zoom_choice = random.choices([True,False], weights=zoom_weights, k=1)[0]
 
-                # Apply zoom to the image/labels if chosen
-                if zoom_choice and polygons: 
+                    # Apply zoom to the image/labels if chosen
+                    if zoom_choice and polygons: 
 
-                    zoom_in = random.choices([True,False], weights=zoom_in_vs_out_weights, k=1)[0]
-                    if zoom_in:
-                        image, polygons = zoom_in_image_and_polygons(image, polygons, zoom_padding[0], zoom_padding[1])
-                    else:
-                        image, polygons = zoom_out_image_and_polygons(image, polygons, zoom_padding[2], zoom_padding[3])
+                        zoom_in = random.choices([True,False], weights=zoom_in_vs_out_weights, k=1)[0]
+                        if zoom_in:
+                            image, polygons = zoom_in_image_and_polygons(image, polygons, zoom_padding[0], zoom_padding[1])
+                        else:
+                            image, polygons = zoom_out_image_and_polygons(image, polygons, zoom_padding[2], zoom_padding[3])
+
+
+                if 'Rotate' not in skip_augmentations or current_subfolder not in skip_augmentations['Rotate']:  
+                    # Get the dims of the image
+                    (h, w) = image.shape[:2]
+                    center = (w / 2, h / 2)
+
+                        
+                    # Get the rotation and rotate the image
+                    rotation_degree = get_rotation_angle()
+                    image = rotate_image(image, rotation_degree)
+                    #rotated_image = image
+
+                    # After rotating the image get the new dims
+                    new_w, new_h = image.shape[1], image.shape[0]
+                    new_center = (new_w / 2, new_h / 2)
+
+                    # Rotate the polygon
+                    polygons = [rotate_polygon(polygon, rotation_degree, center, new_center, (w,h), (new_w,new_h)) for polygon in polygons]
                     
-                # Get the dims of the image
-                (h, w) = image.shape[:2]
-                center = (w / 2, h / 2)
+                    
+                if 'Overlay' not in skip_augmentations or current_subfolder not in skip_augmentations['Overlay']:
+                    overlay_choice = random.choices([True,False], weights=overlay_weights, k=1)[0]
+                    if overlay_choice and polygons:
+                        coco_image_path = random.choice(coco_images)
+                        coco_image = cv2.imread(coco_image_path)
+                        #print(f"Polygons before overlay: {polygons}")
+                        image, polygons = overlay_detections_on_coco(coco_image, image, polygons, overlay_min_max_scale[0], overlay_min_max_scale[1])
 
-                      
-                # Get the rotation and rotate the image
-                rotation_degree = get_rotation_angle()
-                image = rotate_image(image, rotation_degree)
-                #rotated_image = image
-
-                # After rotating the image get the new dims
-                new_w, new_h = image.shape[1], image.shape[0]
-                new_center = (new_w / 2, new_h / 2)
-
-                # Rotate the polygon
-                polygons = [rotate_polygon(polygon, rotation_degree, center, new_center, (w,h), (new_w,new_h)) for polygon in polygons]
                 augmented_polygons = []
 
                 for i, polygon in enumerate(polygons):
@@ -413,23 +525,28 @@ def process_images_and_labels(image_dir, label_dir, mirror_weights, crop_weights
                     rotated_line = class_id + ' ' + ' '.join(f'{x:.6f} {y:.6f}' for x, y in polygon)
                     augmented_polygons.append(rotated_line)
 
-                # Save the rotated image
-                overlay_choice = random.choices([True,False], weights=overlay_weights, k=1)[0]
-                if overlay_choice and polygons: 
-                    coco_image_path = random.choice(coco_images)
-                    coco_image = cv2.imread(coco_image_path)
-                    image = overlay_cropped_detections_on_coco(coco_image, [image], polygons)
-                
-                cv2.imwrite(img_path, image)
+                # Save the augmented image
+                cv2.imwrite(augmented_img_path, image) 
 
-                # Save the rotated labels
-                with open(lbl_path, 'w') as file:
+                # Save the augmented labels
+                with open(augmented_lbl_path, 'w') as file:  
                     file.write('\n'.join(augmented_polygons))
 
 
-dataset_root = r"C:\Users\Chef\Desktop\HACKERMAN\Programming\Python Projects\yoloTrainer\TrainingData copy 10"
+dataset_root = r"C:\Users\Chef\Desktop\HACKERMAN\Programming\Python Projects\yoloTrainer\TrainingData"
 image_root = os.path.join(dataset_root, "images")
 label_root = os.path.join(dataset_root, "labels")
+parent_directory = os.path.dirname(dataset_root)
+augmented_root = os.path.join(parent_directory, os.path.basename(dataset_root) + "_Augmented")
+augmented_image_root = os.path.join(augmented_root, "images")
+augmented_label_root = os.path.join(augmented_root, "labels")
+
+# Copy trainMe.yaml from the original dataset root to the augmented root
+train_me_yaml_path = os.path.join(dataset_root, 'trainMe.yaml')
+augmented_train_me_yaml_path = os.path.join(augmented_root, 'trainMe.yaml')
+os.makedirs(augmented_root, exist_ok=True)
+shutil.copy(train_me_yaml_path, augmented_train_me_yaml_path)  # Perform the copy
+
 
 mirror_weights = [50, 50]
 #mirror_weights = [0, 100]
@@ -437,26 +554,52 @@ zoom_weights = [15, 85]
 #zoom_weights = [0, 100]
 zoom_in_vs_out_weights = [40, 60]
 
+skip_augmentations = {
+    'Zoom' : [],
+    'Crop' : ["binlab"],
+    'Rotate' : [],
+    'Mirror' : []
+}
+
 zoom_in_min_padding = 0.05
 zoom_in_max_padding = 0.5
 zoom_out_min_padding = 0.1
 zoom_out_max_padding = 0.8
 zoom_padding = [zoom_in_min_padding, zoom_in_max_padding, zoom_out_min_padding, zoom_out_max_padding]
 
-crop_weights = [15,85]
+crop_weights = [5,95]
 maintain_aspect_ratio_weights = [50,50]
 
 overlay_weights = [50,50]
+overlay_min_max_scale = [0.3,1.0]
 coco_image_dir = r"S:\COCO Dataset\test2017"
 coco_images = [os.path.join(coco_image_dir, f) for f in os.listdir(coco_image_dir) if f.endswith((".jpg", ".png"))]
 
 # Process training images and labels
-process_images_and_labels(os.path.join(image_root, "train"), os.path.join(label_root, "train"), mirror_weights, crop_weights, maintain_aspect_ratio_weights, zoom_weights, zoom_padding)
+process_images_and_labels(os.path.join(image_root, "train"), 
+                          os.path.join(label_root, "train"), 
+                          os.path.join(augmented_image_root, "train"), 
+                          os.path.join(augmented_label_root, "train"), 
+                          skip_augmentations, 
+                          mirror_weights, 
+                          crop_weights, 
+                          maintain_aspect_ratio_weights, 
+                          zoom_weights, 
+                          zoom_padding)
 
 print("Train data rotated.")
 
 # Process validation images and labels
-process_images_and_labels(os.path.join(image_root, "val"), os.path.join(label_root, "val"), mirror_weights, crop_weights, maintain_aspect_ratio_weights, zoom_weights, zoom_padding)
+process_images_and_labels(os.path.join(image_root, "val"), 
+                          os.path.join(label_root, "val"), 
+                          os.path.join(augmented_image_root, "val"), 
+                          os.path.join(augmented_label_root, "val"), 
+                          skip_augmentations, 
+                          mirror_weights, 
+                          crop_weights, 
+                          maintain_aspect_ratio_weights, 
+                          zoom_weights, 
+                          zoom_padding)
 
 print("Validation data rotated.")
 

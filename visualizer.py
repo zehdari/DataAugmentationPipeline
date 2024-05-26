@@ -42,17 +42,15 @@ class PolygonVisualizerApp:
     }
 
     class_names = {
-        '0': 'buoy',
-        '1': 'buoy_glyph_1',
-        '2': 'buoy_glyph_2',
-        '3': 'buoy_glyph_3',
-        '4': 'buoy_glyph_4',
-        '5': 'gate',
-        '6': 'earth_glyph',
-        '7': 'torpedo_open',
-        '8': 'torpedo_closed',
-        '9': 'torpedo_hole',
-        '10': 'bin',
+        '0': 'buoy', 
+					'1': 'buoy_glyph_1', 
+					'2': 'buoy_glyph_2', 
+					'3': 'buoy_glyph_3', 
+					'4': 'buoy_glyph_4', 
+					'5': 'torpedo_open', 
+					'6': 'torpedo_closed', 
+					'7': 'torpedo_hole', 
+					'8': 'bin'
         # '11', '12', '13', and '14' are placeholders in case you need to add more classes later.
     }
 
@@ -111,7 +109,10 @@ class PolygonVisualizerApp:
             label_dir = os.path.join(self.base_dir, "labels", split, video_name)
             self.frames[split] = []
             if os.path.isdir(img_dir) and os.path.isdir(label_dir):
-                for frame in sorted(os.listdir(img_dir), key=lambda x: int(x.split('.')[0])):
+                all_files = [f for f in os.listdir(img_dir) if f.endswith('.jpg')]
+                sorted_files = sorted(all_files, key=lambda x: int(x.split('.')[0]))
+                print("Files in directory (filtered):", sorted_files)
+                for frame in sorted_files:
                     img_path = os.path.join(img_dir, frame)
                     label_path = os.path.join(label_dir, os.path.splitext(frame)[0] + ".txt")
                     if os.path.isfile(img_path) and os.path.isfile(label_path):
@@ -180,7 +181,7 @@ class PolygonVisualizerApp:
         canvas.update_idletasks()  # Ensure canvas size is updated
         canvas_width = canvas.winfo_width()
         canvas_height = canvas.winfo_height()
-        resized_image = image.resize((canvas_width, canvas_height), Image.ANTIALIAS)
+        resized_image = image.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
 
         # Temporary image for drawing semi-transparent polygons
         temp_image = Image.new('RGBA', resized_image.size, (0, 0, 0, 0))
@@ -200,16 +201,6 @@ class PolygonVisualizerApp:
 
             # Draw the polygon with a thicker line and semi-transparent fill on the temporary image
             temp_draw.polygon(polygon, outline=color, fill=fill_color, width=3)
-
-             # Calculate the bounding box from polygon points
-            xs = [p[0] for p in polygon]
-            ys = [p[1] for p in polygon]
-            xmin, xmax = min(xs), max(xs)
-            ymin, ymax = min(ys), max(ys)
-
-            # Draw the bounding box on the final image
-            temp_draw.rectangle([(xmin, ymin), (xmax, ymax)], outline=color, width=2)
-
 
         # Composite the temporary image with the main image
         resized_image.alpha_composite(temp_image)
@@ -242,7 +233,7 @@ class PolygonVisualizerApp:
         self.root.mainloop()
 
 # Usage example
-base_dir = "/Volumes/USB DISK/TrainingData"
+base_dir = "C:\\Users\\Chef\\Desktop\\HACKERMAN\\Programming\\Python Projects\\yoloTrainer\\TrainingData_Augmented"
 app = PolygonVisualizerApp(base_dir)
 app.run()
 
