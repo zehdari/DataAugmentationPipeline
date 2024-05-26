@@ -318,6 +318,16 @@ def pad_image_and_adjust_polygons(cropped_image, adjusted_polygons, original_dim
 
     return padded_image, shifted_polygons
 
+def overlay_cropped_detections_on_coco(coco_image, detections, detection_polygons):
+    for detection, polygon in zip(detections, detection_polygons):
+        x_min, y_min, x_max, y_max = calculate_overall_bounding_box([polygon])
+        x_min, y_min = int(x_min * detection.shape[1]), int(y_min * detection.shape[0])
+        x_max, y_max = int(x_max * detection.shape[1]), int(y_max * detection.shape[0])
+        cropped_detection = detection[y_min:y_max, x_min:x_max]
+        x_offset = random.randint(0, coco_image.shape[1] - cropped_detection.shape[1])
+        y_offset = random.randint(0, coco_image.shape[0] - cropped_detection.shape[0])
+        coco_image[y_offset:y_offset + cropped_detection.shape[0], x_offset:x_offset + cropped_detection.shape[1]] = cropped_detection
+    return coco_image
 
 def process_images_and_labels(image_dir, label_dir, mirror_weights, crop_weights, maintain_aspect_ratio_weights, zoom_weights, zoom_padding):
     for root, dirs, files in os.walk(image_dir):
@@ -387,11 +397,11 @@ def process_images_and_labels(image_dir, label_dir, mirror_weights, crop_weights
                       
                 # Get the rotation and rotate the image
                 rotation_degree = get_rotation_angle()
-                rotated_image = rotate_image(image, rotation_degree)
+                image = rotate_image(image, rotation_degree)
                 #rotated_image = image
 
                 # After rotating the image get the new dims
-                new_w, new_h = rotated_image.shape[1], rotated_image.shape[0]
+                new_w, new_h = image.shape[1], image.shape[0]
                 new_center = (new_w / 2, new_h / 2)
 
                 # Rotate the polygon
@@ -404,7 +414,13 @@ def process_images_and_labels(image_dir, label_dir, mirror_weights, crop_weights
                     augmented_polygons.append(rotated_line)
 
                 # Save the rotated image
-                cv2.imwrite(img_path, rotated_image)
+                overlay_choice = random.choices([True,False], weights=overlay_weights, k=1)[0]
+                if overlay_choice and polygons: 
+                    coco_image_path = random.choice(coco_images)
+                    coco_image = cv2.imread(coco_image_path)
+                    image = overlay_cropped_detections_on_coco(coco_image, [image], polygons)
+                
+                cv2.imwrite(img_path, image)
 
                 # Save the rotated labels
                 with open(lbl_path, 'w') as file:
@@ -429,6 +445,11 @@ zoom_padding = [zoom_in_min_padding, zoom_in_max_padding, zoom_out_min_padding, 
 
 crop_weights = [15,85]
 maintain_aspect_ratio_weights = [50,50]
+
+overlay_weights = [50,50]
+coco_image_dir = r"S:\COCO Dataset\test2017"
+coco_images = [os.path.join(coco_image_dir, f) for f in os.listdir(coco_image_dir) if f.endswith((".jpg", ".png"))]
+
 # Process training images and labels
 process_images_and_labels(os.path.join(image_root, "train"), os.path.join(label_root, "train"), mirror_weights, crop_weights, maintain_aspect_ratio_weights, zoom_weights, zoom_padding)
 
