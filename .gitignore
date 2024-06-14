@@ -6,3 +6,5 @@ JSON2YOLO/
 TrainingData*
 transdecbuoy/
 videos/
+venv/
+val2017/
