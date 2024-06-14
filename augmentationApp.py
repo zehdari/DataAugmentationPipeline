@@ -83,6 +83,11 @@ class AugmentDatasetGUI(QWidget):
         self.overlay_min_max_scale = [0.3, 1.0]
         self.overlay_scale_weights = [98, 2]
 
+        self.show_labels = True
+        self.show_polygons = True 
+        self.show_bounding_boxes = False 
+        self.show_points = False 
+
         self.initUI()
 
     def initUI(self):
@@ -181,11 +186,44 @@ class AugmentDatasetGUI(QWidget):
         # Image viewer
         self.image_viewer_group = QGroupBox("Image Viewer")
         self.image_viewer_layout = QVBoxLayout()
+
+        folder_list_layout = QHBoxLayout()
         self.folder_list = QListWidget()
         self.folder_list.setMaximumHeight(100)  # Set maximum height for the folder list
-        self.folder_list.setMinimumHeight(50)  # Set maximum height for the folder list
+        self.folder_list.setMinimumHeight(50)  # Set minimum height for the folder list
         self.folder_list.itemClicked.connect(self.display_images)
-        self.image_viewer_layout.addWidget(self.folder_list)
+        folder_list_layout.addWidget(self.folder_list)
+
+
+        checkboxes_button_layout = QVBoxLayout()
+
+        self.labels_checkbox = QCheckBox("Show Labels")
+        self.labels_checkbox.setChecked(True)
+        self.labels_checkbox.stateChanged.connect(self.toggle_labels)
+        checkboxes_button_layout.addWidget(self.labels_checkbox)
+
+        self.polygons_checkbox = QCheckBox("Show Polygons")
+        self.polygons_checkbox.setChecked(True)
+        self.polygons_checkbox.stateChanged.connect(self.toggle_polygons)
+        checkboxes_button_layout.addWidget(self.polygons_checkbox)
+
+        self.bbox_checkbox = QCheckBox("Show Bounding Boxes")
+        self.bbox_checkbox.setChecked(False)
+        self.bbox_checkbox.stateChanged.connect(self.toggle_bounding_boxes)
+        checkboxes_button_layout.addWidget(self.bbox_checkbox)
+
+        self.points_checkbox = QCheckBox("Show Points")
+        self.points_checkbox.setChecked(False)
+        self.points_checkbox.stateChanged.connect(self.toggle_points)
+        checkboxes_button_layout.addWidget(self.points_checkbox)
+
+        self.augment_single_btn = QPushButton("Preview Augmentation")
+        self.augment_single_btn.clicked.connect(self.augment_current_image)
+        checkboxes_button_layout.addWidget(self.augment_single_btn)
+
+        folder_list_layout.addLayout(checkboxes_button_layout)
+
+        self.image_viewer_layout.addLayout(folder_list_layout)
 
         self.image_name_label = QLabel("")
         self.image_name_label.setAlignment(Qt.AlignCenter)
@@ -230,11 +268,6 @@ class AugmentDatasetGUI(QWidget):
         self.run_btn = QPushButton("Run Augmentation")
         self.run_btn.clicked.connect(self.run_augmentation)
         main_layout.addWidget(self.run_btn)
-
-        # Augment single image button
-        self.augment_single_btn = QPushButton("Augment Current Image")
-        self.augment_single_btn.clicked.connect(self.augment_current_image)
-        main_layout.addWidget(self.augment_single_btn)
 
         self.setLayout(main_layout)
 
@@ -375,6 +408,22 @@ class AugmentDatasetGUI(QWidget):
             overlay_checkbox = self.skip_table.cellWidget(row, 5)  # 5 is the index of the Overlay column
             overlay_checkbox.setEnabled(enable_overlay_sliders)
 
+    def toggle_bounding_boxes(self, state):
+        self.show_bounding_boxes = state == Qt.Checked
+        self.show_image()
+
+    def toggle_polygons(self, state):
+        self.show_polygons = state == Qt.Checked
+        self.show_image()
+
+    def toggle_labels(self, state):
+        self.show_labels = state == Qt.Checked
+        self.show_image()
+
+    def toggle_points(self, state):
+        self.show_points = state == Qt.Checked
+        self.show_image()
+
     def show_polygons_on_image(self, image, polygons):
         height, width, _ = image.shape
         image_bytes = image.tobytes()
@@ -384,6 +433,10 @@ class AugmentDatasetGUI(QWidget):
         pixmap = QPixmap.fromImage(qimage)
         scaled_pixmap = pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         painter = QPainter(scaled_pixmap)
+
+        # Enable anti-aliasing for sharper lines and text
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.TextAntialiasing)
 
         labels = []  # To store labels and positions for later drawing
 
@@ -397,47 +450,78 @@ class AugmentDatasetGUI(QWidget):
             if class_id not in self.class_colors:
                 self.class_colors[class_id] = QColor(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
 
+            # Set pen for polygon lines and bounding boxes to full opacity
             pen = QPen(self.class_colors[class_id], 2)
+            pen_color = self.class_colors[class_id]
+            pen.setColor(pen_color)
+
+            # Set brush color with desired opacity
             brush_color = self.class_colors[class_id]
-            brush_color.setAlpha(100)  # Set opacity here (0-255)
+            brush_color.setAlpha(100)  # Set fill opacity here (0-255)
             brush = QBrush(brush_color)
             brush.setStyle(Qt.SolidPattern)
 
             points = [QPointF(pt[0] * scaled_pixmap.width() / orig_w, pt[1] * scaled_pixmap.height() / orig_h) for pt in polygon[1:]]
-            painter.setPen(pen)
-            painter.setBrush(brush)
-            painter.drawPolygon(*points)
+
+            if self.show_polygons:
+                pen_color.setAlpha(100)
+                pen = QPen(pen_color, 2)
+                painter.setPen(pen)
+                painter.setBrush(brush)
+                painter.drawPolygon(*points)
+
+            if self.show_points:
+                for point in points:
+                    painter.setPen(QPen(Qt.black, 1))
+                    painter.drawEllipse(point, 2.5, 2.5)
+                    painter.setPen(QPen(self.class_colors[class_id], 1))
+                    painter.drawEllipse(point, 1.5, 1.5)
 
             # Calculate bounding box
             min_x = min(point.x() for point in points)
             max_x = max(point.x() for point in points)
             min_y = min(point.y() for point in points)
             max_y = max(point.y() for point in points)
-            
-            # Draw bounding box
-            #painter.setPen(QPen(self.class_colors[class_id], 1))
-            painter.setBrush(Qt.NoBrush)
-            painter.drawRect(QRectF(min_x, min_y, max_x - min_x, max_y - min_y))
+
+            if self.show_bounding_boxes:
+                # Draw bounding box with full opacity
+                bounding_box_pen = QPen(self.class_colors[class_id], 1)
+                bounding_box_pen_color = self.class_colors[class_id]
+                bounding_box_pen_color.setAlpha(255)
+                bounding_box_pen.setColor(bounding_box_pen_color)
+
+                painter.setPen(bounding_box_pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(QRectF(min_x, min_y, max_x - min_x, max_y - min_y))
 
             # Store label information for later drawing
             labels.append((class_id, points[0]))
 
         # Draw all labels
-        for class_id, position in labels:
-            # Draw text with black outline
-            painter.setPen(QPen(Qt.black, 2))
-            font_metrics = painter.fontMetrics()
-            text_height = font_metrics.height()
-            label_position = position + QPointF(0, text_height)
-            for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
-                painter.drawText(label_position + QPointF(dx, dy), class_id)
-            
-            # Draw text in white on top
-            painter.setPen(QPen(Qt.white, 1))
-            painter.drawText(label_position, class_id)
+        if self.show_labels:
+            for class_id, position in labels:
+                # Draw text with black outline
+                painter.setPen(QPen(Qt.black, 2))
+                font_metrics = painter.fontMetrics()
+                text_height = font_metrics.height()
+                text_width = font_metrics.horizontalAdvance(class_id)
+                label_position = position + QPointF(0, text_height)
+                
+                # Adjust label position to prevent going off the canvas
+                if label_position.x() + text_width > scaled_pixmap.width():
+                    label_position.setX(scaled_pixmap.width() - text_width/2)
+                if label_position.y() > scaled_pixmap.height():
+                    label_position.setY(scaled_pixmap.height() - text_height/2)
+
+                for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                    painter.drawText(label_position + QPointF(dx, dy), class_id)
+
+                # Draw text in white on top
+                painter.setPen(QPen(Qt.white, 1))
+                painter.drawText(label_position, class_id)
 
         painter.end()
-        
+
         self.image_label.setPixmap(scaled_pixmap)
 
 
@@ -492,6 +576,7 @@ class AugmentDatasetGUI(QWidget):
         return polygons, []
 
     def identify_annotation_type(self, parts):
+        
         if len(parts) < 5:
             return "unknown"
         if len(parts) % 2 == 1 and len(parts) > 5:
@@ -563,10 +648,8 @@ class AugmentDatasetGUI(QWidget):
                 class_ids = []
                 for line in lines:
                     parts = line.strip().split()
-                    print(parts)
                     if self.identify_annotation_type(parts) == 'bbox':
                         parts = self.convert_bbox_to_polygon(parts)
-                        print(parts)
                     
                     class_id = parts[0]
                     class_ids.append(class_id)
