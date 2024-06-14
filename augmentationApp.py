@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QL
                              QFileDialog, QSlider, QSpinBox, QMessageBox, QGroupBox, QFormLayout,
                              QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QGridLayout, QSplitter,
                              QListWidget, QListWidgetItem, QSizePolicy, QScrollArea)
-from PyQt5.QtCore import Qt, QObject, QEvent, QSize, QPointF
+from PyQt5.QtCore import Qt, QObject, QEvent, QSize, QPointF, QRectF
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QBrush, QImage
 import cv2
 from augment_data import augment_image
@@ -251,9 +251,11 @@ class AugmentDatasetGUI(QWidget):
         slider = QSlider(Qt.Horizontal)
         slider.setRange(0, 100)
         slider.setValue(50)
+        slider.setEnabled(False)
         value_label = CustomLineEdit("50")
         value_label.setFixedWidth(40)
         value_label.setAlignment(Qt.AlignCenter)
+        value_label.setEnabled(False)
         slider.valueChanged.connect(lambda value, lbl=value_label: lbl.setText(str(value)))
         value_label.textChanged.connect(lambda text, sld=slider: sld.setValue(int(text)) if text.isdigit() else None)
         return slider, value_label
@@ -269,6 +271,7 @@ class AugmentDatasetGUI(QWidget):
         if dir_name:
             self.dataset_root = dir_name
             self.dataset_label.setText(dir_name)
+            self.update_sliders_state()
             self.scan_folders()
 
     def select_overlay_dir(self):
@@ -276,6 +279,7 @@ class AugmentDatasetGUI(QWidget):
         if dir_name:
             self.overlay_image_dir = dir_name
             self.overlay_label.setText(dir_name)
+            self.update_sliders_state()
 
     def scan_folders(self):
         # Clear previous skip augmentation inputs
@@ -313,7 +317,9 @@ class AugmentDatasetGUI(QWidget):
             self.folder_list.addItem(list_item)
             for col in range(1, 6):
                 checkbox = QCheckBox()
-                checkbox.setStyleSheet("margin-left: 0px; margin-right: auto;")  # Align checkbox to the left
+                checkbox.setStyleSheet("margin-left: 0px; margin-right: auto;")  # Align checkbox to the left 
+                if col == 5:
+                    checkbox.setEnabled(False)
                 self.skip_table.setCellWidget(row, col, checkbox)
 
         # Sort images numerically
@@ -339,12 +345,42 @@ class AugmentDatasetGUI(QWidget):
             polygons, labels = self.load_polygons_and_labels(label_path, image.shape)
             self.show_polygons_on_image(image, polygons)
 
+    def update_sliders_state(self):
+        enable_normal_sliders = bool(self.dataset_root)
+        enable_overlay_sliders = bool(self.overlay_image_dir)
+        
+        # Enable/disable normal sliders
+        self.mirror_slider.setEnabled(enable_normal_sliders)
+        self.mirror_value.setEnabled(enable_normal_sliders)
+        self.crop_slider.setEnabled(enable_normal_sliders)
+        self.crop_value.setEnabled(enable_normal_sliders)
+        self.zoom_slider.setEnabled(enable_normal_sliders)
+        self.zoom_value.setEnabled(enable_normal_sliders)
+        self.rotate_slider.setEnabled(enable_normal_sliders)
+        self.rotate_value.setEnabled(enable_normal_sliders)
+        self.rotation_random_vs_90_slider.setEnabled(enable_normal_sliders)
+        self.rotation_random_vs_90_value.setEnabled(enable_normal_sliders)
+        self.zoom_in_vs_out_slider.setEnabled(enable_normal_sliders)
+        self.zoom_in_vs_out_value.setEnabled(enable_normal_sliders)
+        self.maintain_aspect_ratio_slider.setEnabled(enable_normal_sliders)
+        self.maintain_aspect_ratio_value.setEnabled(enable_normal_sliders)
+        
+        # Enable/disable overlay sliders
+        self.overlay_slider.setEnabled(enable_overlay_sliders)
+        self.overlay_value.setEnabled(enable_overlay_sliders)
+        self.overlay_scale_slider.setEnabled(enable_overlay_sliders)
+        self.overlay_scale_value.setEnabled(enable_overlay_sliders)
+
+        for row in range(self.skip_table.rowCount()):
+            overlay_checkbox = self.skip_table.cellWidget(row, 5)  # 5 is the index of the Overlay column
+            overlay_checkbox.setEnabled(enable_overlay_sliders)
+
     def show_polygons_on_image(self, image, polygons):
         height, width, _ = image.shape
         image_bytes = image.tobytes()
         qimage = QImage(image_bytes, width, height, width * 3, QImage.Format_RGB888)
         qimage = qimage.rgbSwapped()  # Convert BGR to RGB
-        
+
         pixmap = QPixmap.fromImage(qimage)
         scaled_pixmap = pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         painter = QPainter(scaled_pixmap)
@@ -372,6 +408,17 @@ class AugmentDatasetGUI(QWidget):
             painter.setBrush(brush)
             painter.drawPolygon(*points)
 
+            # Calculate bounding box
+            min_x = min(point.x() for point in points)
+            max_x = max(point.x() for point in points)
+            min_y = min(point.y() for point in points)
+            max_y = max(point.y() for point in points)
+            
+            # Draw bounding box
+            #painter.setPen(QPen(self.class_colors[class_id], 1))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(QRectF(min_x, min_y, max_x - min_x, max_y - min_y))
+
             # Store label information for later drawing
             labels.append((class_id, points[0]))
 
@@ -393,6 +440,20 @@ class AugmentDatasetGUI(QWidget):
         
         self.image_label.setPixmap(scaled_pixmap)
 
+
+    def convert_bbox_to_polygon(self, bbox):
+        class_id = bbox[0]
+        x_center, y_center, width, height = map(float, bbox[1:])
+        half_w = width / 2
+        half_h = height / 2
+        points = [
+            x_center - half_w, y_center - half_h,
+            x_center + half_w, y_center - half_h,
+            x_center + half_w, y_center + half_h,
+            x_center - half_w, y_center + half_h
+        ]
+        return [class_id] + points
+
     def load_polygons_and_labels(self, label_path, target_size):
         polygons = []
 
@@ -401,14 +462,21 @@ class AugmentDatasetGUI(QWidget):
                 label_data = f.readlines()
 
             for line in label_data:
-                polygon_data = line.strip().split()
-                if len(polygon_data) < 9:
+
+                line_data = line.strip().split()
+                annotation_type = self.identify_annotation_type(line_data)
+                if annotation_type == 'bbox':
+                    polygon_data = self.convert_bbox_to_polygon(line_data)
+                else:
+                    polygon_data = line_data
+
+                if len(polygon_data) < 5:
                     continue  # Ensure there are enough coordinates for a polygon
 
                 class_id = polygon_data[0]
                 if class_id not in self.class_colors:
                     self.class_colors[class_id] = QColor(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-
+                
                 pen = QPen(self.class_colors[class_id], 2)
                 brush_color = self.class_colors[class_id]
                 brush_color.setAlpha(100)  # Set opacity here (0-255)
@@ -423,6 +491,16 @@ class AugmentDatasetGUI(QWidget):
 
         return polygons, []
 
+    def identify_annotation_type(self, parts):
+        if len(parts) < 5:
+            return "unknown"
+        if len(parts) % 2 == 1 and len(parts) > 5:
+            return "polygon"
+        elif len(parts) == 5:
+            return "bbox"
+        else:
+            return "unknown"
+    
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.show_image()
@@ -485,6 +563,11 @@ class AugmentDatasetGUI(QWidget):
                 class_ids = []
                 for line in lines:
                     parts = line.strip().split()
+                    print(parts)
+                    if self.identify_annotation_type(parts) == 'bbox':
+                        parts = self.convert_bbox_to_polygon(parts)
+                        print(parts)
+                    
                     class_id = parts[0]
                     class_ids.append(class_id)
                     polygon = [(float(parts[i]), float(parts[i + 1])) for i in range(1, len(parts), 2)]
