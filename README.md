@@ -14,8 +14,12 @@ This tool provides a graphical interface for augmenting image datasets with vari
 - **Single Image Augmentation**: Augment the currently displayed image.
 - **Batch Augmentation**: Apply augmentations to the entire dataset.
 - **Real-time Augmentation Preview**: Preview augmentations in real-time before applying them.
-- **Undo/Redo Functionality**: Undo or redo augmentations.
 - **Annotation Overlay**: Display and augment annotations such as bounding boxes and polygons.
+
+### Coming soon
+
+- **Undo/Redo Functionality**: Undo or redo augmentations.
+
 - **Customizable Augmentation Pipelines**: Create and save custom augmentation pipelines for reuse.
 - **Output Directory Management**: Specify output directories for augmented datasets.
 - **Comprehensive Logging**: Keep detailed logs of augmentations applied for reproducibility.
