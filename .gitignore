@@ -8,3 +8,4 @@ transdecbuoy/
 videos/
 venv/
 val2017/
+__pycache__/

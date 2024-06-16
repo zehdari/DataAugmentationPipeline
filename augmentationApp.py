@@ -5,7 +5,7 @@ import random
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                              QFileDialog, QSlider, QSpinBox, QMessageBox, QGroupBox, QFormLayout,
                              QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QGridLayout, QSplitter,
-                             QListWidget, QListWidgetItem, QSizePolicy, QScrollArea)
+                             QListWidget, QListWidgetItem, QSizePolicy, QScrollArea, QTabWidget)
 from PyQt5.QtCore import Qt, QObject, QEvent, QSize, QPointF, QRectF
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QBrush, QImage
 import cv2
@@ -27,33 +27,13 @@ class CustomLineEdit(QLineEdit):
         self.deselect()
         super().focusOutEvent(event)
 
-class ImagePopup(QWidget):
-    def __init__(self, image):
-        super().__init__()
-        self.setWindowTitle('Augmented Image')
-        self.setGeometry(100, 100, 800, 600)
-        layout = QVBoxLayout()
-        self.image_label = QLabel()
-        layout.addWidget(self.image_label)
-        self.setLayout(layout)
-        
-        # Convert image array to QImage
-        height, width, channel = image.shape
-        bytes_per_line = 3 * width
-        qimage = QImage(image.data, width, height, bytes_per_line, QImage.Format_RGB888)
-        qimage = qimage.rgbSwapped()  # Convert BGR to RGB
-        
-        # Convert QImage to QPixmap
-        pixmap = QPixmap.fromImage(qimage)
-        scaled_pixmap = pixmap.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.image_label.setPixmap(scaled_pixmap)
-
 class AugmentDatasetGUI(QWidget):
     def __init__(self):
         super().__init__()
 
         self.dataset_root = ""
         self.overlay_image_dir = ""
+        self.output_dir = ""
         self.skip_augmentations = {
             'Zoom': [],
             'Crop': [],
@@ -88,6 +68,8 @@ class AugmentDatasetGUI(QWidget):
         self.show_bounding_boxes = False 
         self.show_points = False 
 
+        self.output_dir_set = False  # Flag to track if output directory has been set
+
         self.initUI()
 
     def initUI(self):
@@ -96,25 +78,49 @@ class AugmentDatasetGUI(QWidget):
 
         main_layout = QVBoxLayout()
 
+        tab_widget = QTabWidget()
+        self.augmentation_settings_tab = QWidget()
+        self.image_viewer_tab = QWidget()
+
+        tab_widget.addTab(self.augmentation_settings_tab, "Augmentation Settings")
+        tab_widget.addTab(self.image_viewer_tab, "Image Viewer")
+
+        self.init_augmentation_settings_tab()
+        self.init_image_viewer_tab()
+
+        main_layout.addWidget(tab_widget)
+        self.setLayout(main_layout)
+
+        # Install event filter
+        self.installEventFilter(ClickFilter(self))
+
+    def init_augmentation_settings_tab(self):
+        layout = QVBoxLayout()
+
         # Combined directory selection
         dir_group = QGroupBox("Select Directories")
         dir_layout = QFormLayout()
         self.dataset_label = QLabel("Not selected")
         self.overlay_label = QLabel("Not selected")
+        self.output_dir_label = QLabel("Not selected")
         self.dataset_btn = QPushButton("Select Dataset Root")
         self.overlay_btn = QPushButton("Select Overlay Image Directory")
+        self.output_dir_btn = QPushButton("Select Output Directory")
         self.dataset_btn.clicked.connect(self.select_dataset_root)
         self.overlay_btn.clicked.connect(self.select_overlay_dir)
+        self.output_dir_btn.clicked.connect(self.select_output_dir)
         dir_layout.addRow(self.dataset_btn, self.dataset_label)
         dir_layout.addRow(self.overlay_btn, self.overlay_label)
+        dir_layout.addRow(self.output_dir_btn, self.output_dir_label)
         dir_group.setLayout(dir_layout)
-        main_layout.addWidget(dir_group)
+        dir_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        layout.addWidget(dir_group)
 
         # Sliders and Skip Augmentations
         weights_skip_layout = QSplitter(Qt.Horizontal)
         
         # Weights sliders with scroll area inside a group box
-        weights_group = QGroupBox("Augmentation Weights")
+        weights_group = QGroupBox("Augmentation Settings")
         weights_layout = QGridLayout()
 
         self.mirror_slider, self.mirror_value = self.create_slider()
@@ -152,7 +158,7 @@ class AugmentDatasetGUI(QWidget):
         scroll_widget.setLayout(weights_layout)
         scroll_area.setWidget(scroll_widget)
 
-        group_box_with_scroll = QGroupBox("Augmentation Weights")
+        group_box_with_scroll = QGroupBox("Augmentation Settings")
         group_box_layout = QVBoxLayout()
         group_box_layout.addWidget(scroll_area)
         group_box_with_scroll.setLayout(group_box_layout)
@@ -164,10 +170,10 @@ class AugmentDatasetGUI(QWidget):
         self.skip_group = QGroupBox("Skip Augmentations for Folders")
         self.skip_layout = QVBoxLayout()
         self.skip_table = QTableWidget()
-        self.skip_table.setColumnCount(6)
-        self.skip_table.setHorizontalHeaderLabels(['Folder', 'Zoom', 'Crop', 'Rotate', 'Mirror', 'Overlay'])
+        self.skip_table.setColumnCount(7)  # Update the column count
+        self.skip_table.setHorizontalHeaderLabels(['Folder', 'Zoom', 'Crop', 'Rotate', 'Mirror', 'Overlay', 'Skip All'])  # Add new header
         self.skip_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for col in range(1, 6):
+        for col in range(1, 7):
             self.skip_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.Fixed)
             self.skip_table.setColumnWidth(col, 50)
         self.skip_layout.addWidget(self.skip_table)
@@ -183,17 +189,22 @@ class AugmentDatasetGUI(QWidget):
         weights_skip_layout.setMinimumWidth(1200)  # Ensure the splitter does not resize smaller than the initial setup
         weights_skip_layout.setHandleWidth(10)
 
-        # Image viewer
-        self.image_viewer_group = QGroupBox("Image Viewer")
+        layout.addWidget(weights_skip_layout)
+        self.augmentation_settings_tab.setLayout(layout)
+
+    def init_image_viewer_tab(self):
+        layout = QVBoxLayout()
+
+        # Image viewer layout
         self.image_viewer_layout = QVBoxLayout()
 
         folder_list_layout = QHBoxLayout()
         self.folder_list = QListWidget()
-        self.folder_list.setMaximumHeight(100)  # Set maximum height for the folder list
+        self.folder_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # Set size policy to Expanding
+        self.folder_list.setMaximumHeight(125)  # Set maximum height for the folder list
         self.folder_list.setMinimumHeight(50)  # Set minimum height for the folder list
         self.folder_list.itemClicked.connect(self.display_images)
         folder_list_layout.addWidget(self.folder_list)
-
 
         checkboxes_button_layout = QVBoxLayout()
 
@@ -221,7 +232,15 @@ class AugmentDatasetGUI(QWidget):
         self.augment_single_btn.clicked.connect(self.augment_current_image)
         checkboxes_button_layout.addWidget(self.augment_single_btn)
 
+        # Add button to save current preview
+        self.save_preview_btn = QPushButton("Save Current Preview")
+        self.save_preview_btn.clicked.connect(self.save_current_preview)
+        checkboxes_button_layout.addWidget(self.save_preview_btn)
+
         folder_list_layout.addLayout(checkboxes_button_layout)
+
+        folder_list_layout.setStretch(0, 1)  # Set stretch factor for folder_list
+        folder_list_layout.setStretch(1, 0)  # Adjust margins as needed
 
         self.image_viewer_layout.addLayout(folder_list_layout)
 
@@ -234,8 +253,6 @@ class AugmentDatasetGUI(QWidget):
         self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.image_label.setMinimumHeight(150)
         self.image_viewer_layout.addWidget(self.image_label)
-
-        self.image_viewer_group.setLayout(self.image_viewer_layout)
 
         # Navigation controls
         self.image_navigation_layout = QHBoxLayout()
@@ -252,33 +269,19 @@ class AugmentDatasetGUI(QWidget):
 
         self.image_viewer_layout.addLayout(self.image_navigation_layout)
 
-        # Add a vertical splitter above the image viewer
-        vertical_splitter = QSplitter(Qt.Vertical)
-        vertical_splitter.addWidget(weights_skip_layout)
-        vertical_splitter.addWidget(self.image_viewer_group)
-        vertical_splitter.setSizes([200, 800])  # Initial sizes of the panels
-        vertical_splitter.setHandleWidth(10)
+        layout.addLayout(self.image_viewer_layout)
 
-        main_layout.addWidget(vertical_splitter)
-
-        vertical_splitter.setCollapsible(0, False)
-        vertical_splitter.setCollapsible(1, False)
+        # Augment and save button
+        self.augment_and_save_btn = QPushButton("Augment and Save Current Image")
+        self.augment_and_save_btn.clicked.connect(self.augment_and_save_current_image)
+        layout.addWidget(self.augment_and_save_btn)
 
         # Run button
         self.run_btn = QPushButton("Run Augmentation")
         self.run_btn.clicked.connect(self.run_augmentation)
-        main_layout.addWidget(self.run_btn)
+        layout.addWidget(self.run_btn)
 
-        self.setLayout(main_layout)
-
-        # Install event filter
-        self.installEventFilter(ClickFilter(self))
-
-        # Connect the splitter's move and resize events
-        vertical_splitter.splitterMoved.connect(self.splitter_resized)
-
-    def splitter_resized(self, pos, index):
-        self.resizeEvent(None)
+        self.image_viewer_tab.setLayout(layout)
 
     def create_slider(self):
         slider = QSlider(Qt.Horizontal)
@@ -304,6 +307,8 @@ class AugmentDatasetGUI(QWidget):
         if dir_name:
             self.dataset_root = dir_name
             self.dataset_label.setText(dir_name)
+            if not self.output_dir_set:
+                self.prompt_for_output_dir()
             self.update_sliders_state()
             self.scan_folders()
 
@@ -313,6 +318,33 @@ class AugmentDatasetGUI(QWidget):
             self.overlay_image_dir = dir_name
             self.overlay_label.setText(dir_name)
             self.update_sliders_state()
+
+    def select_output_dir(self):
+        dir_name = QFileDialog.getExistingDirectory(self, "Select Output Directory")
+        if dir_name:
+            self.output_dir = dir_name
+            self.output_dir_label.setText(dir_name)
+        else:
+            self.prompt_for_output_dir()
+
+    def prompt_for_output_dir(self):
+        while not self.output_dir:
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Output Directory")
+            msg_box.setText(f"Would you like to specify an output directory? \n Default: {self.dataset_root}_Augmented")
+            specify_btn = msg_box.addButton("Specify", QMessageBox.AcceptRole)
+            default_btn = msg_box.addButton("Default", QMessageBox.RejectRole)
+            msg_box.exec_()
+
+            if msg_box.clickedButton() == specify_btn:
+                dir_name = QFileDialog.getExistingDirectory(self, "Select Output Directory")
+                if dir_name:
+                    self.output_dir = dir_name
+                    self.output_dir_label.setText(dir_name)
+            else:
+                self.output_dir = self.dataset_root + "_Augmented"
+                self.output_dir_label.setText(self.output_dir)
+            self.output_dir_set = True
 
     def scan_folders(self):
         # Clear previous skip augmentation inputs
@@ -348,15 +380,26 @@ class AugmentDatasetGUI(QWidget):
             self.skip_table.setItem(row, 0, folder_item)
             list_item = QListWidgetItem(folder)
             self.folder_list.addItem(list_item)
-            for col in range(1, 6):
+            for col in range(1, 7):  # Update the range to include the new column
                 checkbox = QCheckBox()
                 checkbox.setStyleSheet("margin-left: 0px; margin-right: auto;")  # Align checkbox to the left 
                 if col == 5:
                     checkbox.setEnabled(False)
+                if col == 6:  # Connect the new checkbox to the slot
+                    checkbox.stateChanged.connect(lambda state, r=row: self.toggle_skip_all(state, r))
                 self.skip_table.setCellWidget(row, col, checkbox)
 
         # Sort images numerically
         self.image_paths.sort(key=self.natural_keys)
+
+    def toggle_skip_all(self, state, row):
+        skip_all_checked = state == Qt.Checked
+        for col in range(1, 6):  # Update to check relevant columns
+            checkbox = self.skip_table.cellWidget(row, col)
+            checkbox.setEnabled(not skip_all_checked)
+        if not self.overlay_image_dir:
+            overlay_checkbox = self.skip_table.cellWidget(row, 5)
+            overlay_checkbox.setEnabled(False)
 
     def display_images(self, item):
         self.folder_name = item.text()
@@ -369,14 +412,34 @@ class AugmentDatasetGUI(QWidget):
     def show_image(self):
         if self.augmented_image is not None:
             # Display the augmented image
-            self.show_polygons_on_image(self.augmented_image, self.augmented_polygons)
+            self.image_name_label.setText(f"(Preview) {os.path.basename(self.current_image_path)}")
+            self.display_image_and_polygons(self.augmented_image, self.augmented_polygons)
         elif self.folder_images:
             self.current_image_path = self.folder_images[self.current_image_index]
-            self.image_name_label.setText(os.path.basename(self.current_image_path))
-            image = cv2.imread(self.current_image_path)
+
+            # Check if the augmented image exists
+            relative_image_path = os.path.relpath(self.current_image_path, self.dataset_root)
+            augmented_image_path = os.path.join(self.output_dir, relative_image_path)
+
+            if os.path.exists(augmented_image_path):
+                image = cv2.imread(augmented_image_path)
+                self.image_name_label.setText(f"(Augmented) {os.path.basename(self.current_image_path)}")
+            else:
+                image = cv2.imread(self.current_image_path)
+                self.image_name_label.setText(os.path.basename(self.current_image_path))
+
+            # Check if the augmented label exists
             label_path = self.label_paths.get(self.current_image_path)
-            polygons, labels = self.load_polygons_and_labels(label_path, image.shape)
-            self.show_polygons_on_image(image, polygons)
+            relative_label_path = os.path.relpath(label_path, self.dataset_root)
+            augmented_label_path = os.path.join(self.output_dir, relative_label_path)
+
+            if os.path.exists(augmented_label_path):
+                polygons, labels = self.load_polygons_and_labels(augmented_label_path, image.shape)
+            else:
+                polygons, labels = self.load_polygons_and_labels(label_path, image.shape)
+
+            self.display_image_and_polygons(image, polygons)
+            self.update_navigation_buttons()
 
     def update_sliders_state(self):
         enable_normal_sliders = bool(self.dataset_root)
@@ -424,7 +487,7 @@ class AugmentDatasetGUI(QWidget):
         self.show_points = state == Qt.Checked
         self.show_image()
 
-    def show_polygons_on_image(self, image, polygons):
+    def display_image_and_polygons(self, image, polygons):
         height, width, _ = image.shape
         image_bytes = image.tobytes()
         qimage = QImage(image_bytes, width, height, width * 3, QImage.Format_RGB888)
@@ -524,7 +587,6 @@ class AugmentDatasetGUI(QWidget):
 
         self.image_label.setPixmap(scaled_pixmap)
 
-
     def convert_bbox_to_polygon(self, bbox):
         class_id = bbox[0]
         x_center, y_center, width, height = map(float, bbox[1:])
@@ -541,7 +603,7 @@ class AugmentDatasetGUI(QWidget):
     def load_polygons_and_labels(self, label_path, target_size):
         polygons = []
 
-        if label_path and os.path.exists(label_path):
+        if (label_path and os.path.exists(label_path)):
             with open(label_path, 'r') as f:
                 label_data = f.readlines()
 
@@ -549,7 +611,7 @@ class AugmentDatasetGUI(QWidget):
 
                 line_data = line.strip().split()
                 annotation_type = self.identify_annotation_type(line_data)
-                if annotation_type == 'bbox':
+                if (annotation_type == 'bbox'):
                     polygon_data = self.convert_bbox_to_polygon(line_data)
                 else:
                     polygon_data = line_data
@@ -585,10 +647,14 @@ class AugmentDatasetGUI(QWidget):
             return "bbox"
         else:
             return "unknown"
-    
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.show_image()
+
+    def update_navigation_buttons(self):
+        self.prev_button.setEnabled(self.current_image_index > 0)
+        self.next_button.setEnabled(self.current_image_index < len(self.folder_images) - 1)
 
     def show_previous_image(self):
         if self.current_image_index > 0:
@@ -611,10 +677,14 @@ class AugmentDatasetGUI(QWidget):
             self.show_image()
 
     def run_augmentation(self):
-        if not self.dataset_root and not self.overlay_image_dir:
-            QMessageBox.warning(self, "Input Required", "Please select both dataset root and Overlay image directory.")
+        if not self.dataset_root:
+            QMessageBox.warning(self, "Input Required", "Please select the dataset root.")
             return
 
+        if not self.output_dir_set:
+            self.prompt_for_output_dir()
+
+        # Add the logic to run the augmentation for all images
         pass
 
     def augment_current_image(self):
@@ -687,12 +757,41 @@ class AugmentDatasetGUI(QWidget):
             class_id = polygon[0]
             denormalized_polygon = [class_id] + [(int(x * new_w), int(y * new_h)) for (x, y) in polygon[1:]]
             denormalized_polygons.append(denormalized_polygon)
-        # Draw augmented polygons on the image
 
         self.augmented_image = augmented_image
         self.augmented_polygons = denormalized_polygons
         self.augmented_image_original_dims = (new_h, new_w)
-        self.show_polygons_on_image(augmented_image, denormalized_polygons)
+        self.show_image()
+
+    def augment_and_save_current_image(self):
+        self.augment_current_image()
+        self.save_augmented_image()
+
+    def save_current_preview(self):
+        if self.augmented_image is None or self.augmented_image.size == 0:
+            QMessageBox.warning(self, "No Augmented Image", "There is no augmented image to save.")
+            return
+        self.save_augmented_image()
+
+    def save_augmented_image(self):
+        if not self.output_dir_set:
+            self.prompt_for_output_dir()
+        if self.augmented_image is not None:
+            relative_image_path = os.path.relpath(self.current_image_path, self.dataset_root)
+            augmented_image_path = os.path.join(self.output_dir, relative_image_path)
+
+            os.makedirs(os.path.dirname(augmented_image_path), exist_ok=True)
+            cv2.imwrite(augmented_image_path, self.augmented_image)
+
+            relative_label_path = os.path.relpath(self.label_paths[self.current_image_path], self.dataset_root)
+            augmented_label_path = os.path.join(self.output_dir, relative_label_path)
+
+            os.makedirs(os.path.dirname(augmented_label_path), exist_ok=True)
+            with open(augmented_label_path, 'w') as f:
+                for polygon in self.augmented_polygons:
+                    class_id = polygon[0]
+                    coords = [f"{x / self.augmented_image_original_dims[1]} {y / self.augmented_image_original_dims[0]}" for x, y in polygon[1:]]
+                    f.write(f"{class_id} {' '.join(coords)}\n")
 
     def atoi(self, text):
         return int(text) if text.isdigit() else text
