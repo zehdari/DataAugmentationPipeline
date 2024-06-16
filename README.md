@@ -8,6 +8,7 @@ This tool provides a graphical interface for augmenting image datasets with vari
 ## Features
 
 - **Directory Selection**: Choose the dataset root and overlay image directory.
+- **Output Directory Management**: Specify output directories for augmented datasets.
 - **Augmentation Configuration**: Adjust parameters like mirror weights, crop weights, zoom weights, rotate weights, and overlay weights.
 - **Skip Augmentations**: Option to skip certain augmentations for specific folders.
 - **Image Viewer**: View and navigate through images in the dataset.
@@ -19,15 +20,14 @@ This tool provides a graphical interface for augmenting image datasets with vari
 ### Coming soon
 
 - **Undo/Redo Functionality**: Undo or redo augmentations.
-
 - **Customizable Augmentation Pipelines**: Create and save custom augmentation pipelines for reuse.
-- **Output Directory Management**: Specify output directories for augmented datasets.
 - **Comprehensive Logging**: Keep detailed logs of augmentations applied for reproducibility.
 
 ## Dataset Structure
 
 The dataset should be structured as follows:
-```
+
+```xml
 Dataset/
 │
 ├── images/
@@ -50,32 +50,40 @@ Dataset/
 The labels should be in YOLO format, supporting polygons or boxes. Examples:
 
 - **Polygons**:
-    ```
+
+    ```xml
     class_id x1 y1 x2 y2 x3 y3 x4 y4 ...
     ```
+
 - **Boxes**:
-    ```
+
+    ```xml
     class_id xcenter ycenter width height
     ```
 
 ## Setting Up the Environment
 
 1. **Create a Virtual Environment**:
+
     ```bash
     python -m venv venv
     ```
 
 2. **Activate the Virtual Environment**:
     - On Windows:
+
         ```bash
         venv\Scripts\activate
         ```
+
     - On macOS and Linux:
+
         ```bash
         source venv/bin/activate
         ```
 
 3. **Install the Required Dependencies**:
+
     ```bash
     pip install -r requirements.txt
     ```
@@ -83,6 +91,7 @@ The labels should be in YOLO format, supporting polygons or boxes. Examples:
 ## Usage
 
 1. **Initialize and Run**:
+
     ```bash
     python augmentationApp.py
     ```
