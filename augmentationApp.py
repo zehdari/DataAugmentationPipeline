@@ -2,15 +2,18 @@ import sys
 import os
 import re
 import random
+from collections import Counter
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
                              QFileDialog, QSlider, QSpinBox, QMessageBox, QGroupBox, QFormLayout,
                              QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView, QCheckBox, QGridLayout, QSplitter,
-                             QListWidget, QListWidgetItem, QSizePolicy, QScrollArea, QTabWidget)
+                             QListWidget, QListWidgetItem, QSizePolicy, QScrollArea, QTabWidget, QColorDialog, QAbstractItemView)
 from PyQt5.QtCore import Qt, QObject, QEvent, QSize, QPointF, QRectF
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QBrush, QImage
 import cv2
-from augment_data import augment_image
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import numpy as np
+from augment_data import augment_image
 
 class ClickFilter(QObject):
     def __init__(self, parent=None):
@@ -81,12 +84,15 @@ class AugmentDatasetGUI(QWidget):
         tab_widget = QTabWidget()
         self.augmentation_settings_tab = QWidget()
         self.image_viewer_tab = QWidget()
+        self.dataset_stats_tab = QWidget()  # New tab for Dataset Stats
 
-        tab_widget.addTab(self.augmentation_settings_tab, "Augmentation Settings")
+        tab_widget.addTab(self.augmentation_settings_tab, "Settings")
         tab_widget.addTab(self.image_viewer_tab, "Image Viewer")
+        tab_widget.addTab(self.dataset_stats_tab, "Dataset Stats")  # Adding the new tab
 
         self.init_augmentation_settings_tab()
         self.init_image_viewer_tab()
+        self.init_dataset_stats_tab()  # Initialize the new tab
 
         main_layout.addWidget(tab_widget)
         self.setLayout(main_layout)
@@ -124,31 +130,31 @@ class AugmentDatasetGUI(QWidget):
         weights_layout = QGridLayout()
 
         self.mirror_slider, self.mirror_value = self.create_slider()
-        self.add_slider_to_layout(weights_layout, "Mirror Weights (Mirror/No Mirror):", self.mirror_slider, self.mirror_value, 0)
-
-        self.crop_slider, self.crop_value = self.create_slider()
-        self.add_slider_to_layout(weights_layout, "Crop Weights (Crop/No Crop):", self.crop_slider, self.crop_value, 1)
-
-        self.zoom_slider, self.zoom_value = self.create_slider()
-        self.add_slider_to_layout(weights_layout, "Zoom Weights (Zoom/No Zoom):", self.zoom_slider, self.zoom_value, 2)
+        self.add_slider_to_layout(weights_layout, "Mirror % Probability:", self.mirror_slider, self.mirror_value, 0)
 
         self.rotate_slider, self.rotate_value = self.create_slider()
-        self.add_slider_to_layout(weights_layout, "Rotate Weights (Rotate/No Rotate):", self.rotate_slider, self.rotate_value, 3)
-
-        self.overlay_slider, self.overlay_value = self.create_slider()
-        self.add_slider_to_layout(weights_layout, "Overlay Weights (Overlay/No Overlay):", self.overlay_slider, self.overlay_value, 4)
+        self.add_slider_to_layout(weights_layout, "Rotate % Probability:", self.rotate_slider, self.rotate_value, 1)
 
         self.rotation_random_vs_90_slider, self.rotation_random_vs_90_value = self.create_slider()
-        self.add_slider_to_layout(weights_layout, "Rotation Random vs 90: ", self.rotation_random_vs_90_slider, self.rotation_random_vs_90_value, 5)
+        self.add_slider_to_layout(weights_layout, "Rotation (0 to 360) vs 90 %: ", self.rotation_random_vs_90_slider, self.rotation_random_vs_90_value, 2)
 
-        self.zoom_in_vs_out_slider, self.zoom_in_vs_out_value = self.create_slider()
-        self.add_slider_to_layout(weights_layout, "Zoom In vs Out Weights: ", self.zoom_in_vs_out_slider, self.zoom_in_vs_out_value, 6)
+        self.crop_slider, self.crop_value = self.create_slider()
+        self.add_slider_to_layout(weights_layout, "Crop % Probability:", self.crop_slider, self.crop_value, 3)
 
         self.maintain_aspect_ratio_slider, self.maintain_aspect_ratio_value = self.create_slider()
-        self.add_slider_to_layout(weights_layout, "Maintain Aspect Ratio Weights: ", self.maintain_aspect_ratio_slider, self.maintain_aspect_ratio_value, 7)
+        self.add_slider_to_layout(weights_layout, "Maintain Aspect Ratio on Crop %: ", self.maintain_aspect_ratio_slider, self.maintain_aspect_ratio_value, 4)
+
+        self.zoom_slider, self.zoom_value = self.create_slider()
+        self.add_slider_to_layout(weights_layout, "Zoom % Probability:", self.zoom_slider, self.zoom_value, 5)
+
+        self.zoom_in_vs_out_slider, self.zoom_in_vs_out_value = self.create_slider()
+        self.add_slider_to_layout(weights_layout, "Zoom In vs Out %: ", self.zoom_in_vs_out_slider, self.zoom_in_vs_out_value, 6)
+
+        self.overlay_slider, self.overlay_value = self.create_slider()
+        self.add_slider_to_layout(weights_layout, "Overlay % Probability:", self.overlay_slider, self.overlay_value, 7)
 
         self.overlay_scale_slider, self.overlay_scale_value = self.create_slider()
-        self.add_slider_to_layout(weights_layout, "Overlay Scale Weights: ", self.overlay_scale_slider, self.overlay_scale_value, 8)
+        self.add_slider_to_layout(weights_layout, "Overlay Scale % Probability: ", self.overlay_scale_slider, self.overlay_scale_value, 8)
 
         weights_group.setLayout(weights_layout)
 
@@ -165,6 +171,7 @@ class AugmentDatasetGUI(QWidget):
         group_box_with_scroll.setMinimumWidth(400)
 
         weights_skip_layout.addWidget(group_box_with_scroll)
+        skip_colors_layout = QSplitter(Qt.Vertical)
 
         # Skip Augmentations
         self.skip_group = QGroupBox("Skip Augmentations for Folders")
@@ -173,13 +180,32 @@ class AugmentDatasetGUI(QWidget):
         self.skip_table.setColumnCount(7)  # Update the column count
         self.skip_table.setHorizontalHeaderLabels(['Folder', 'Zoom', 'Crop', 'Rotate', 'Mirror', 'Overlay', 'Skip All'])  # Add new header
         self.skip_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.skip_table.setSelectionMode(QAbstractItemView.NoSelection)
         for col in range(1, 7):
             self.skip_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.Fixed)
             self.skip_table.setColumnWidth(col, 50)
         self.skip_layout.addWidget(self.skip_table)
         self.skip_group.setLayout(self.skip_layout)
-        weights_skip_layout.addWidget(self.skip_group)
+        
+        skip_colors_layout.addWidget(self.skip_group)
 
+        self.class_color_group = QGroupBox("Class Colors")
+        self.class_colors_layout = QVBoxLayout()
+        self.class_colors_table = QTableWidget()
+        self.class_colors_table.setColumnCount(2)
+        self.class_colors_table.setHorizontalHeaderLabels(['Class', 'Color'])
+        self.class_colors_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.class_colors_table.itemClicked.connect(self.on_color_cell_clicked)
+        self.class_colors_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.class_colors_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # Set size policy to Expanding
+        self.class_colors_layout.addWidget(self.class_colors_table)
+        self.class_color_group.setLayout(self.class_colors_layout)
+        
+        skip_colors_layout.addWidget(self.class_color_group)
+        skip_colors_layout.setCollapsible(0, False)
+        skip_colors_layout.setCollapsible(1, False)
+
+        weights_skip_layout.addWidget(skip_colors_layout)
         weights_skip_layout.setSizes([800, 400])  # Initial sizes of the panels, evenly split
         weights_skip_layout.setCollapsible(0, False)
         weights_skip_layout.setCollapsible(1, False)
@@ -199,12 +225,19 @@ class AugmentDatasetGUI(QWidget):
         self.image_viewer_layout = QVBoxLayout()
 
         folder_list_layout = QHBoxLayout()
+        folder_and_button_layout = QVBoxLayout()  # New layout for folder list and button
         self.folder_list = QListWidget()
         self.folder_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # Set size policy to Expanding
         self.folder_list.setMaximumHeight(125)  # Set maximum height for the folder list
         self.folder_list.setMinimumHeight(50)  # Set minimum height for the folder list
         self.folder_list.itemClicked.connect(self.display_images)
-        folder_list_layout.addWidget(self.folder_list)
+        folder_and_button_layout.addWidget(self.folder_list)
+
+        self.show_original_btn = QPushButton("Show Original Image")  # Moved button
+        self.show_original_btn.clicked.connect(self.show_original_image)
+        folder_and_button_layout.addWidget(self.show_original_btn)
+
+        folder_list_layout.addLayout(folder_and_button_layout)
 
         checkboxes_button_layout = QVBoxLayout()
 
@@ -271,17 +304,159 @@ class AugmentDatasetGUI(QWidget):
 
         layout.addLayout(self.image_viewer_layout)
 
+        # Bottom button layout
+        bottom_button_layout = QHBoxLayout()
+
         # Augment and save button
         self.augment_and_save_btn = QPushButton("Augment and Save Current Image")
         self.augment_and_save_btn.clicked.connect(self.augment_and_save_current_image)
-        layout.addWidget(self.augment_and_save_btn)
+        bottom_button_layout.addWidget(self.augment_and_save_btn)
 
         # Run button
         self.run_btn = QPushButton("Run Augmentation")
         self.run_btn.clicked.connect(self.run_augmentation)
-        layout.addWidget(self.run_btn)
+        bottom_button_layout.addWidget(self.run_btn)
+
+        layout.addLayout(bottom_button_layout)
 
         self.image_viewer_tab.setLayout(layout)
+
+    def init_dataset_stats_tab(self):
+        layout = QVBoxLayout()
+
+        self.stats_layout = QVBoxLayout()
+        layout.addLayout(self.stats_layout)
+
+        self.dataset_stats_tab.setLayout(layout)
+
+    def generate_class_colors(self):
+        def random_color():
+            return QColor(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+
+        for class_id in self.class_colors:
+            self.class_colors[class_id] = random_color()
+        self.update_class_colors_table()
+
+    def on_color_cell_clicked(self, item):
+        if item.column() == 1:  # Check if the clicked cell is in the color column
+            row = item.row()
+            class_id = self.class_colors_table.item(row, 0).text()
+            color = QColorDialog.getColor(self.class_colors[class_id], self, "Choose Class Color")
+            if color.isValid():
+                self.class_colors[class_id] = color
+                self.update_class_colors_table()
+                self.show_image()
+
+    def update_class_colors_table(self):
+        self.class_colors_table.setRowCount(len(self.class_colors))
+        for row, (class_id, color) in enumerate(self.class_colors.items()):
+            
+            class_item = QTableWidgetItem(class_id)
+            color_item = QTableWidgetItem()
+            color_item.setBackground(color)
+            self.class_colors_table.setItem(row, 0, class_item)
+            self.class_colors_table.setItem(row, 1, color_item)
+
+    def change_class_color(self):
+        selected_items = self.class_colors_table.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "No Selection", "Please select a class to change its color.")
+            return
+
+        class_item = selected_items[0]
+        class_id = class_item.text()
+
+        color = QColorDialog.getColor(self.class_colors[class_id], self, "Choose Class Color")
+        if color.isValid():
+            self.class_colors[class_id] = color
+            self.update_class_colors_table()
+            self.show_image()
+
+    def get_dataset_stats(self):
+        if not self.dataset_root:
+            QMessageBox.warning(self, "Input Required", "Please select the dataset root.")
+            return
+
+        self.clear_layout(self.stats_layout)
+
+        class_counter = Counter()
+        image_counter = 0
+        instance_counter = 0
+
+        for label_path in self.label_paths.values():
+            if os.path.exists(label_path):
+                image_counter += 1
+                with open(label_path, 'r') as file:
+                    lines = file.readlines()
+                    for line in lines:
+                        class_id = line.strip().split()[0]
+                        class_counter[class_id] += 1
+                        instance_counter += 1
+
+        total_classes = len(class_counter)
+        total_instances = instance_counter
+        avg_instances_per_image = total_instances / image_counter if image_counter else 0
+
+        stats_label = QLabel(f"Total Classes: {total_classes}")
+        self.stats_layout.addWidget(stats_label)
+
+        images_label = QLabel(f"Total Images: {image_counter}")
+        self.stats_layout.addWidget(images_label)
+
+        instances_label = QLabel(f"Total Instances: {total_instances}")
+        self.stats_layout.addWidget(instances_label)
+
+        avg_instances_label = QLabel(f"Average Instances per Image: {avg_instances_per_image:.2f}")
+        self.stats_layout.addWidget(avg_instances_label)
+
+        class_table = QTableWidget()
+        class_table.setColumnCount(3)
+        class_table.setHorizontalHeaderLabels(["Class", "Instances", "Percentage"])
+        class_table.setRowCount(len(class_counter))
+        class_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+        for row, (class_id, count) in enumerate(class_counter.items()):
+            class_item = QTableWidgetItem(class_id)
+            count_item = QTableWidgetItem(str(count))
+            percentage_item = QTableWidgetItem(f"{(count / total_instances) * 100:.2f}%")
+            class_table.setItem(row, 0, class_item)
+            class_table.setItem(row, 1, count_item)
+            class_table.setItem(row, 2, percentage_item)
+
+        self.stats_layout.addWidget(class_table)
+
+        # Plotting a bar graph for class distribution
+        fig, ax = plt.subplots()
+        classes = list(class_counter.keys())
+        counts = list(class_counter.values())
+
+        # Assign colors to classes
+        self.class_colors = {class_id: QColor(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)) for class_id in classes}
+        colors = [self.class_colors[class_id] for class_id in classes]
+
+        bars = ax.bar(classes, counts, color=[self.rgb_to_hex(c) for c in colors])
+        ax.set_xlabel('Classes')
+        ax.set_ylabel('Number of Instances')
+        ax.set_title('Class Distribution')
+        plt.tight_layout()
+
+        # Add text labels above bars
+        for bar, count in zip(bars, counts):
+            yval = bar.get_height()
+
+        canvas = FigureCanvas(fig)
+        self.stats_layout.addWidget(canvas)
+
+        self.update_class_colors_table()  # Populate the colors table after generating dataset stats
+
+    def rgb_to_hex(self, qcolor):
+        return '#{:02x}{:02x}{:02x}'.format(qcolor.red(), qcolor.green(), qcolor.blue())
+
+    def clear_layout(self, layout):
+        while layout.count():
+            child = layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
 
     def create_slider(self):
         slider = QSlider(Qt.Horizontal)
@@ -311,6 +486,7 @@ class AugmentDatasetGUI(QWidget):
                 self.prompt_for_output_dir()
             self.update_sliders_state()
             self.scan_folders()
+            self.get_dataset_stats()  # Generate dataset stats when dataset is loaded
 
     def select_overlay_dir(self):
         dir_name = QFileDialog.getExistingDirectory(self, "Select Overlay Image Directory")
@@ -392,6 +568,8 @@ class AugmentDatasetGUI(QWidget):
         # Sort images numerically
         self.image_paths.sort(key=self.natural_keys)
 
+        self.generate_class_colors()  # Generate class colors after loading dataset
+
     def toggle_skip_all(self, state, row):
         skip_all_checked = state == Qt.Checked
         for col in range(1, 6):  # Update to check relevant columns
@@ -409,11 +587,13 @@ class AugmentDatasetGUI(QWidget):
         self.augmented_image = None  # Clear the augmented image when folder changes
         self.show_image()
 
+    
     def show_image(self):
         if self.augmented_image is not None:
             # Display the augmented image
             self.image_name_label.setText(f"(Preview) {os.path.basename(self.current_image_path)}")
             self.display_image_and_polygons(self.augmented_image, self.augmented_polygons)
+            self.show_original_btn.setText("Show Original Image")
         elif self.folder_images:
             self.current_image_path = self.folder_images[self.current_image_index]
 
@@ -424,9 +604,13 @@ class AugmentDatasetGUI(QWidget):
             if os.path.exists(augmented_image_path):
                 image = cv2.imread(augmented_image_path)
                 self.image_name_label.setText(f"(Augmented) {os.path.basename(self.current_image_path)}")
+                self.show_original_btn.setText("Show Original Image")
+                self.show_original_btn.setEnabled(True)
             else:
                 image = cv2.imread(self.current_image_path)
                 self.image_name_label.setText(os.path.basename(self.current_image_path))
+                self.show_original_btn.setText("Show Original Image")
+                self.show_original_btn.setEnabled(False)
 
             # Check if the augmented label exists
             label_path = self.label_paths.get(self.current_image_path)
@@ -440,6 +624,17 @@ class AugmentDatasetGUI(QWidget):
 
             self.display_image_and_polygons(image, polygons)
             self.update_navigation_buttons()
+
+    def show_original_image(self):
+        if self.current_image_path:
+            if self.show_original_btn.text() == "Show Original Image":
+                self.image_name_label.setText(f"(Original) {os.path.basename(self.current_image_path)}")
+                original_image = cv2.imread(self.current_image_path)
+                polygons, _ = self.load_polygons_and_labels(self.label_paths.get(self.current_image_path), original_image.shape)
+                self.display_image_and_polygons(original_image, polygons)
+                self.show_original_btn.setText("Show Augmented Image")
+            else:
+                self.show_image()
 
     def update_sliders_state(self):
         enable_normal_sliders = bool(self.dataset_root)
@@ -468,7 +663,7 @@ class AugmentDatasetGUI(QWidget):
         self.overlay_scale_value.setEnabled(enable_overlay_sliders)
 
         for row in range(self.skip_table.rowCount()):
-            overlay_checkbox = self.skip_table.cellWidget(row, 5)  # 5 is the index of the Overlay column
+            overlay_checkbox = self.skip_table.cellWidget(row, 5)
             overlay_checkbox.setEnabled(enable_overlay_sliders)
 
     def toggle_bounding_boxes(self, state):
@@ -491,7 +686,7 @@ class AugmentDatasetGUI(QWidget):
         height, width, _ = image.shape
         image_bytes = image.tobytes()
         qimage = QImage(image_bytes, width, height, width * 3, QImage.Format_RGB888)
-        qimage = qimage.rgbSwapped()  # Convert BGR to RGB
+        qimage = qimage.rgbSwapped()
 
         pixmap = QPixmap.fromImage(qimage)
         scaled_pixmap = pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -515,20 +710,17 @@ class AugmentDatasetGUI(QWidget):
 
             # Set pen for polygon lines and bounding boxes to full opacity
             pen = QPen(self.class_colors[class_id], 2)
-            pen_color = self.class_colors[class_id]
+            pen_color = QColor(self.class_colors[class_id].red(), self.class_colors[class_id].green(), self.class_colors[class_id].blue(), 255) # Full opacity
             pen.setColor(pen_color)
 
             # Set brush color with desired opacity
-            brush_color = self.class_colors[class_id]
-            brush_color.setAlpha(100)  # Set fill opacity here (0-255)
+            brush_color = QColor(self.class_colors[class_id].red(), self.class_colors[class_id].green(), self.class_colors[class_id].blue(), 100)  # Set fill opacity here (0-255)
             brush = QBrush(brush_color)
             brush.setStyle(Qt.SolidPattern)
 
             points = [QPointF(pt[0] * scaled_pixmap.width() / orig_w, pt[1] * scaled_pixmap.height() / orig_h) for pt in polygon[1:]]
 
             if self.show_polygons:
-                pen_color.setAlpha(100)
-                pen = QPen(pen_color, 2)
                 painter.setPen(pen)
                 painter.setBrush(brush)
                 painter.drawPolygon(*points)
@@ -537,7 +729,7 @@ class AugmentDatasetGUI(QWidget):
                 for point in points:
                     painter.setPen(QPen(Qt.black, 1))
                     painter.drawEllipse(point, 2.5, 2.5)
-                    painter.setPen(QPen(self.class_colors[class_id], 1))
+                    painter.setPen(QPen(pen_color, 1))
                     painter.drawEllipse(point, 1.5, 1.5)
 
             # Calculate bounding box
@@ -548,11 +740,7 @@ class AugmentDatasetGUI(QWidget):
 
             if self.show_bounding_boxes:
                 # Draw bounding box with full opacity
-                bounding_box_pen = QPen(self.class_colors[class_id], 1)
-                bounding_box_pen_color = self.class_colors[class_id]
-                bounding_box_pen_color.setAlpha(255)
-                bounding_box_pen.setColor(bounding_box_pen_color)
-
+                bounding_box_pen = QPen(pen_color, 1)
                 painter.setPen(bounding_box_pen)
                 painter.setBrush(Qt.NoBrush)
                 painter.drawRect(QRectF(min_x, min_y, max_x - min_x, max_y - min_y))
@@ -624,8 +812,7 @@ class AugmentDatasetGUI(QWidget):
                     self.class_colors[class_id] = QColor(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
                 
                 pen = QPen(self.class_colors[class_id], 2)
-                brush_color = self.class_colors[class_id]
-                brush_color.setAlpha(100)  # Set opacity here (0-255)
+                brush_color = QColor(self.class_colors[class_id].red(), self.class_colors[class_id].green(), self.class_colors[class_id].blue(), 100)  # Set opacity here (0-255)
                 brush = QBrush(brush_color)
                 brush.setStyle(Qt.SolidPattern)
 
